@@ -14,6 +14,11 @@ from app.domain.models import AnalysisCapability, MappingConfidence, MutationCap
 
 MAX_STRUCTURAL_TEXT_ELEMENTS = 500
 MAX_RENDERED_TEXT_SPANS = 10_000
+# A small edge contact is not enough evidence that an unmodeled visual hides
+# text. This threshold is deliberately applied to the structural text box, not
+# to the visual object's area, so a large background panel does not dominate
+# the calculation.
+MATERIAL_OCCLUSION_TEXT_AREA_RATIO = 0.05
 
 
 class ParserLimitError(RuntimeError):
@@ -180,6 +185,48 @@ def _shape_bbox(shape, slide_w: float, slide_h: float) -> tuple[float, float, fl
     )
 
 
+def _intersection_area(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
+    x0 = max(a[0], b[0])
+    y0 = max(a[1], b[1])
+    x1 = min(a[2], b[2])
+    y1 = min(a[3], b[3])
+    return max(0.0, x1 - x0) * max(0.0, y1 - y0)
+
+
+def _materially_intersects_text(
+    visual_bbox: tuple[float, float, float, float],
+    text_bbox: tuple[float, float, float, float],
+) -> bool:
+    tx0, ty0, tx1, ty1 = text_bbox
+    text_area = max(0.0, tx1 - tx0) * max(0.0, ty1 - ty0)
+    return text_area > 0 and _intersection_area(visual_bbox, text_bbox) / text_area >= MATERIAL_OCCLUSION_TEXT_AREA_RATIO
+
+
+def _is_potential_text_occluder(shape) -> bool:
+    """Return only objects that can materially paint over text.
+
+    python-pptx does not expose reliable transparency for every shape class.
+    An unresolved *overlapping* fill is therefore conservative, while an
+    object with no fill, or a line/connector, is not promoted to a blocker.
+    """
+    if getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.GROUP:
+        return any(_is_potential_text_occluder(child) for child in shape.shapes)
+
+    kind = _unsupported_visual_kind(shape)
+    if kind in {"picture", "chart", "media", "embedded_ole_object", "linked_ole_object", "ole_object", "igx_graphic", "smart_art", "diagram", "graphic_frame", "canvas", "freeform", "callout"}:
+        return True
+    # Separators and connectors can cross text, but without a line-width and
+    # visibility model they are not evidence of material occlusion.
+    if kind in {"line", "connector"}:
+        return False
+
+    # Empty ordinary AutoShapes are the important FV-01 case. A no-fill shape
+    # cannot obscure text; a fill whose opacity is unavailable is treated as a
+    # possible occluder only when it materially overlaps text.
+    fill = getattr(shape, "fill", None)
+    return bool(fill is not None and getattr(fill, "type", None) not in {None, "BACKGROUND", 5})
+
+
 def _table_text(shape) -> str:
     if not getattr(shape, "has_table", False):
         return ""
@@ -238,25 +285,33 @@ def parse_pptx_shapes(source: Path) -> list[ShapeRecord]:
         ))
 
     for si, slide in enumerate(prs.slides):
-        for shape in slide.shapes:
+        # python-pptx exposes slide.shapes in drawing order (back to front).
+        # Keep that index so a visual behind text does not become a false
+        # occlusion finding. Inherited layout/master objects have no reliable
+        # cross-layer z-order, so only their material intersections are kept.
+        slide_text_records: list[tuple[ShapeRecord, int]] = []
+        visual_candidates: list[tuple[int, tuple[float, float, float, float], str, int | None]] = []
+
+        for z_order, shape in enumerate(slide.shapes):
             if getattr(shape, "has_text_frame", False):
                 text = shape.text or ""
-                if not text.strip():
+                if text.strip():
+                    cap, notes, sizes, fonts = _shape_mutation_capability(shape)
+                    record = ShapeRecord(
+                        slide_index=si,
+                        shape_id=shape.shape_id,
+                        text=text,
+                        normalized_text=normalize_text(text),
+                        role=_role(shape, slide_h, sizes),
+                        explicit_font_sizes_pt=sizes,
+                        mutation_capability=cap,
+                        notes=notes,
+                        normalized_bbox=_shape_bbox(shape, slide_w, slide_h),
+                        requested_font_families=fonts,
+                    )
+                    append_record(record)
+                    slide_text_records.append((record, z_order))
                     continue
-                cap, notes, sizes, fonts = _shape_mutation_capability(shape)
-                append_record(ShapeRecord(
-                    slide_index=si,
-                    shape_id=shape.shape_id,
-                    text=text,
-                    normalized_text=normalize_text(text),
-                    role=_role(shape, slide_h, sizes),
-                    explicit_font_sizes_pt=sizes,
-                    mutation_capability=cap,
-                    notes=notes,
-                    normalized_bbox=_shape_bbox(shape, slide_w, slide_h),
-                    requested_font_families=fonts,
-                ))
-                continue
 
             # Unsupported visible text must remain represented in the analysis
             # universe instead of silently disappearing from coverage.
@@ -272,14 +327,13 @@ def parse_pptx_shapes(source: Path) -> list[ShapeRecord]:
                 )
                 continue
 
-            kind = _unsupported_visual_kind(shape)
-            if kind:
-                append_unsupported(
-                    slide_index=si,
-                    shape_id=shape.shape_id,
-                    bbox=_shape_bbox(shape, slide_w, slide_h),
-                    kind=kind,
-                )
+            if _is_potential_text_occluder(shape):
+                visual_candidates.append((
+                    z_order,
+                    _shape_bbox(shape, slide_w, slide_h),
+                    _unsupported_visual_kind(shape) or "filled_shape",
+                    shape.shape_id,
+                ))
 
         # python-pptx exposes only slide-local shapes above. Static text on a
         # layout or master can still render on the slide; record it as unknown
@@ -296,19 +350,44 @@ def parse_pptx_shapes(source: Path) -> list[ShapeRecord]:
                     continue
                 text = (getattr(shape, "text", "") or "").strip() if getattr(shape, "has_text_frame", False) else ""
                 if not text:
+                    if _is_potential_text_occluder(shape):
+                        visual_candidates.append((
+                            -1,
+                            _shape_bbox(shape, slide_w, slide_h),
+                            f"inherited_{prefix}_{_unsupported_visual_kind(shape) or 'filled_shape'}",
+                            None,
+                        ))
                     continue
                 key = (prefix, int(getattr(shape, "shape_id", 0) or 0))
-                if key in inherited_seen:
-                    continue
-                inherited_seen.add(key)
+                if key not in inherited_seen:
+                    inherited_seen.add(key)
+                    append_unsupported(
+                        slide_index=si,
+                        shape_id=-(100000 + inherited_id),
+                        bbox=_shape_bbox(shape, slide_w, slide_h),
+                        kind=f"inherited_{prefix}_text",
+                        text=text,
+                    )
+                    inherited_id += 1
+
+        # Visuals become explicit unsupported coverage only if they can obscure
+        # a structural text region. Slide-local ordering is known; inherited
+        # objects are conservatively considered ambiguous when they intersect.
+        occluder_id = 1
+        for visual_z, visual_bbox, kind, shape_id in visual_candidates:
+            affected = any(
+                _materially_intersects_text(visual_bbox, text_record.normalized_bbox)
+                and (visual_z < 0 or visual_z > text_z)
+                for text_record, text_z in slide_text_records
+            )
+            if affected:
                 append_unsupported(
                     slide_index=si,
-                    shape_id=-(100000 + inherited_id),
-                    bbox=_shape_bbox(shape, slide_w, slide_h),
-                    kind=f"inherited_{prefix}_text",
-                    text=text,
+                    shape_id=shape_id if shape_id is not None else -(200000 + occluder_id),
+                    bbox=visual_bbox,
+                    kind=f"potential_text_occluder_{kind}",
                 )
-                inherited_id += 1
+                occluder_id += 1
     return out
 
 

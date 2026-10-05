@@ -49,6 +49,8 @@ STORE = SessionStore(
     SESSION_ROOT,
     ttl_seconds=int(os.getenv("VENUE_SESSION_TTL_SECONDS", "2700")),
     max_sessions=int(os.getenv("VENUE_MAX_SESSIONS", "24")),
+    max_demo_sessions=int(os.getenv("VENUE_MAX_DEMO_SESSIONS", "6")),
+    demo_absolute_ttl_seconds=int(os.getenv("VENUE_DEMO_ABSOLUTE_TTL_SECONDS", "900")),
 )
 PLANNER = GeminiPlanner()
 
@@ -259,7 +261,7 @@ def create_demo_session():
     content = demo.read_bytes()
     digest = hashlib.sha256(content).hexdigest()
     try:
-        s = STORE.create("venue-agent-demo.pptx", content, digest)
+        s = STORE.create("venue-agent-demo.pptx", content, digest, is_demo=True)
         token = s.take_issued_capability_token()
     except RuntimeError as e:
         raise HTTPException(503, str(e))

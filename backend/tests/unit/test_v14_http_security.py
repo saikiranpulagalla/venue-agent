@@ -2,6 +2,7 @@ import asyncio
 
 from fastapi.testclient import TestClient
 
+from app import main
 from app.main import app
 from app.security.http import RequestBodyLimitMiddleware
 
@@ -62,3 +63,13 @@ def test_body_limit_rejects_chunked_request_without_content_length():
 
     assert sent[0]['type'] == 'http.response.start'
     assert sent[0]['status'] == 413
+
+
+def test_deep_readiness_degrades_when_renderer_binary_exists_but_real_render_fails(monkeypatch):
+    monkeypatch.setattr(main, 'libreoffice_version', lambda: 'LibreOffice present')
+    monkeypatch.setattr(main, '_deep_renderer_readiness', lambda: (False, 'render_probe_failed:RenderError'))
+
+    result = main.deep_readiness()
+
+    assert result['status'] == 'degraded'
+    assert result['renderer_probe'] == 'render_probe_failed:RenderError'

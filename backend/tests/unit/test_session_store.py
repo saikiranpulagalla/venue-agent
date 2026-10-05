@@ -252,3 +252,96 @@ def test_session_artifacts_use_private_permissions(tmp_path: Path):
     assert (os.stat(s.root).st_mode & 0o777) == 0o700
     assert (os.stat(s.source_path).st_mode & 0o777) == 0o600
     assert (s.root / SESSION_MARKER).exists()
+
+
+def test_demo_pool_reclaims_oldest_inactive_demo_without_consuming_upload_reserve(tmp_path: Path):
+    clock = Clock()
+    store = SessionStore(
+        tmp_path / "sessions", ttl_seconds=60, max_sessions=4,
+        max_demo_sessions=1, demo_absolute_ttl_seconds=120, clock=clock,
+    )
+    first = store.create("demo.pptx", b"demo-1", digest(b"demo-1"), is_demo=True)
+    upload = store.create("upload.pptx", b"upload", digest(b"upload"))
+    clock.now += 1
+    replacement = store.create("demo.pptx", b"demo-2", digest(b"demo-2"), is_demo=True)
+
+    assert not first.root.exists()
+    assert replacement.is_demo is True
+    assert store.get(upload.session_id) is upload
+    assert len(store._items) == 2
+
+
+def test_demo_absolute_lifetime_cannot_be_extended_by_idle_ttl_refresh(tmp_path: Path):
+    clock = Clock()
+    store = SessionStore(
+        tmp_path / "sessions", ttl_seconds=60, max_sessions=3,
+        max_demo_sessions=1, demo_absolute_ttl_seconds=100, clock=clock,
+    )
+    demo = store.create("demo.pptx", b"demo", digest(b"demo"), is_demo=True)
+    assert demo.absolute_expires_at == 1100
+
+    clock.now = 1050
+    with store.locked(demo.session_id) as live:
+        assert live.expires_at == 1100
+    clock.now = 1101
+
+    with pytest.raises(KeyError):
+        store.get(demo.session_id)
+    assert not demo.root.exists()
+
+
+def test_demo_absolute_lifetime_may_be_shorter_than_normal_idle_ttl(tmp_path: Path):
+    clock = Clock()
+    store = SessionStore(
+        tmp_path / "sessions", ttl_seconds=300, max_sessions=3,
+        max_demo_sessions=1, demo_absolute_ttl_seconds=60, clock=clock,
+    )
+    demo = store.create("demo.pptx", b"demo", digest(b"demo"), is_demo=True)
+
+    assert demo.expires_at == 1060
+    assert demo.absolute_expires_at == 1060
+
+
+def test_active_demo_is_not_reaped_at_absolute_expiry(tmp_path: Path):
+    clock = Clock()
+    store = SessionStore(
+        tmp_path / "sessions", ttl_seconds=60, max_sessions=3,
+        max_demo_sessions=1, demo_absolute_ttl_seconds=100, clock=clock,
+    )
+    demo = store.create("demo.pptx", b"demo", digest(b"demo"), is_demo=True)
+    clock.now = 1050
+    with store.locked(demo.session_id):
+        pass
+    clock.now = 1099
+    with store.locked(demo.session_id):
+        clock.now = 1101
+        assert store.cleanup_expired() == 0
+        assert demo.root.exists()
+
+    assert store.cleanup_expired() == 1
+    assert not demo.root.exists()
+
+
+def test_concurrent_demo_churn_never_consumes_upload_capacity(tmp_path: Path):
+    store = SessionStore(
+        tmp_path / "sessions", ttl_seconds=60, max_sessions=4,
+        max_demo_sessions=1, demo_absolute_ttl_seconds=120,
+    )
+    failures: list[Exception] = []
+
+    def create_demo(i: int):
+        try:
+            store.create(f"demo-{i}.pptx", f"demo-{i}".encode(), digest(f"demo-{i}".encode()), is_demo=True)
+        except Exception as exc:  # test records unexpected admission failures
+            failures.append(exc)
+
+    threads = [threading.Thread(target=create_demo, args=(i,)) for i in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert not failures
+    assert sum(s.is_demo for s in store._items.values()) <= 1
+    upload = store.create("upload.pptx", b"upload", digest(b"upload"))
+    assert upload.is_demo is False

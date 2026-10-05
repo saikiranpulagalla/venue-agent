@@ -2,5 +2,5 @@
 builder = "DOCKERFILE"
 
 [deploy]
-healthcheckPath = "/health/readiness"
+healthcheckPath = "/health/deep-readiness"
 healthcheckTimeout = 300

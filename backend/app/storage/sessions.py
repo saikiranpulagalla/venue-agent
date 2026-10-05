@@ -54,6 +54,8 @@ class Session:
     created_at: float = 0.0
     last_activity_at: float = 0.0
     expires_at: float = 0.0
+    is_demo: bool = False
+    absolute_expires_at: float | None = None
     state: WorkflowState = WorkflowState.UPLOADED
     analysis: AnalysisResult | None = None
     candidates: list[RepairCandidate] = field(default_factory=list)
@@ -140,6 +142,8 @@ class SessionStore:
         *,
         ttl_seconds: int = 45 * 60,
         max_sessions: int = 24,
+        max_demo_sessions: int | None = None,
+        demo_absolute_ttl_seconds: int = 15 * 60,
         clock: Callable[[], float] = time.time,
         clear_orphans_on_start: bool = True,
         reaper_interval_seconds: float | None = None,
@@ -151,6 +155,14 @@ class SessionStore:
         self.base = base
         self.ttl_seconds = ttl_seconds
         self.max_sessions = max_sessions
+        self.max_demo_sessions = max(1, min(
+            max_sessions - 1 if max_sessions > 1 else 1,
+            max_demo_sessions if max_demo_sessions is not None else min(6, max_sessions),
+        ))
+        # Unlike the sliding idle TTL, this is a hard upper bound for demo
+        # sessions and may intentionally be shorter than the normal session
+        # lifetime.
+        self.demo_absolute_ttl_seconds = max(60, demo_absolute_ttl_seconds)
         self._clock = clock
         self._items: dict[str, Session] = {}
         self._lock = threading.Lock()
@@ -223,7 +235,10 @@ class SessionStore:
         now = self._clock()
         roots: list[Path] = []
         for sid, s in list(self._items.items()):
-            if s.active_operations == 0 and not s.delete_requested and now >= s.expires_at:
+            expired = now >= s.expires_at or (
+                s.absolute_expires_at is not None and now >= s.absolute_expires_at
+            )
+            if s.active_operations == 0 and not s.delete_requested and expired:
                 s.delete_requested = True
                 self._items.pop(sid, None)
                 roots.append(s.root)
@@ -235,11 +250,20 @@ class SessionStore:
         self._remove_roots(roots)
         return len(roots)
 
-    def create(self, filename: str, content: bytes, sha256: str) -> Session:
+    def create(self, filename: str, content: bytes, sha256: str, *, is_demo: bool = False) -> Session:
         del filename
         roots: list[Path]
         with self._lock:
             roots = self._collect_expired_locked()
+            if is_demo:
+                demos = [s for s in self._items.values() if s.is_demo and not s.delete_requested]
+                if len(demos) >= self.max_demo_sessions:
+                    reclaimable = [s for s in demos if s.active_operations == 0]
+                    if reclaimable:
+                        oldest = min(reclaimable, key=lambda item: item.last_activity_at)
+                        oldest.delete_requested = True
+                        self._items.pop(oldest.session_id, None)
+                        roots.append(oldest.root)
             if len(self._items) >= self.max_sessions:
                 s = None
             else:
@@ -253,6 +277,7 @@ class SessionStore:
                 source = root / "source.pptx"
                 _secure_write(source, content)
                 now = self._clock()
+                absolute_expires_at = now + self.demo_absolute_ttl_seconds if is_demo else None
                 s = Session(
                     session_id=sid,
                     root=root,
@@ -261,7 +286,9 @@ class SessionStore:
                     capability_hash=_capability_digest(token),
                     created_at=now,
                     last_activity_at=now,
-                    expires_at=now + self.ttl_seconds,
+                    expires_at=min(now + self.ttl_seconds, absolute_expires_at) if absolute_expires_at else now + self.ttl_seconds,
+                    is_demo=is_demo,
+                    absolute_expires_at=absolute_expires_at,
                     _issued_capability_token=token,
                 )
                 self._items[sid] = s
@@ -314,7 +341,7 @@ class SessionStore:
                 now = self._clock()
                 s.active_operations += 1
                 s.last_activity_at = now
-                s.expires_at = now + self.ttl_seconds
+                s.expires_at = min(now + self.ttl_seconds, s.absolute_expires_at) if s.absolute_expires_at else now + self.ttl_seconds
                 reserved = True
         self._remove_roots(roots)
         if not reserved or s is None:
@@ -327,7 +354,7 @@ class SessionStore:
                 if self._items.get(sid) is s and not s.delete_requested:
                     now = self._clock()
                     s.last_activity_at = now
-                    s.expires_at = now + self.ttl_seconds
+                    s.expires_at = min(now + self.ttl_seconds, s.absolute_expires_at) if s.absolute_expires_at else now + self.ttl_seconds
                     valid = True
             if not valid:
                 raise KeyError(sid)
@@ -339,7 +366,7 @@ class SessionStore:
                 if self._items.get(sid) is s and not s.delete_requested:
                     now = self._clock()
                     s.last_activity_at = now
-                    s.expires_at = now + self.ttl_seconds
+                    s.expires_at = min(now + self.ttl_seconds, s.absolute_expires_at) if s.absolute_expires_at else now + self.ttl_seconds
 
     def delete(self, sid: str) -> bool:
         roots: list[Path]
