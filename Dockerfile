@@ -22,6 +22,6 @@ USER venueagent
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=15s --start-period=15s --retries=3 \
-  CMD python -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health/deep-readiness',timeout=12)); raise SystemExit(0 if d.get('status')=='ready' else 1)"
+  CMD python -c "import json,os,urllib.request; p=os.getenv('PORT','8000'); d=json.load(urllib.request.urlopen(f'http://127.0.0.1:{p}/health/deep-readiness',timeout=12)); raise SystemExit(0 if d.get('status')=='ready' else 1)"
 
-CMD ["uvicorn","app.main:app","--host","0.0.0.0","--port","8000","--workers","1","--no-access-log"]
+CMD ["sh","-c","exec uvicorn app.main:app --host 0.0.0.0 --port \"${PORT:-8000}\" --workers 1 --no-access-log"]

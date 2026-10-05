@@ -13,8 +13,9 @@ def test_process_local_state_rejects_multi_worker_environment(monkeypatch):
 
 def test_docker_contract_uses_one_worker_no_access_log_and_real_render_health(project_root: Path):
     dockerfile = (project_root / 'Dockerfile').read_text()
-    assert '"--workers","1"' in dockerfile
-    assert '"--no-access-log"' in dockerfile
+    assert '--workers 1' in dockerfile
+    assert '--no-access-log' in dockerfile
+    assert '${PORT:-8000}' in dockerfile
     assert '/health/deep-readiness' in dockerfile
 
 
