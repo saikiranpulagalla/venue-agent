@@ -1,102 +1,236 @@
-# Venue-Aware Presentation Repair Agent
+# Venue Agent
 
-A WCC Launchpad 30 Track 01 (Agentic AI) prototype that reasons over an existing presentation plus venue constraints, proposes only bounded repairs, requires explicit human approval before mutation, creates a modified copy, and independently re-verifies the saved artifact.
+**A venue-aware presentation repair agent that improves supported slide text for a defined viewing setup—then verifies the saved copy before reporting the outcome.**
+
+**[Try the live demo →](https://venue-agent-production.up.railway.app)** &nbsp;|&nbsp; WCC Launchpad 30 — Track 01: Agentic AI
+
+## The problem
+
+PowerPoint understands the slide. AV tools understand the room. The audience experiences both.
+
+Text that seems acceptable on a presenter's laptop can create greater structural visual demand when it is projected into a bounded active image and viewed from a real distance. Venue Agent connects those inputs: it inspects a PPTX's supported structural text, evaluates it against a named reference profile and venue geometry, and offers bounded repairs under explicit user constraints.
+
+It does **not** claim that every person can read every slide. It makes a narrower, inspectable claim about the supported structural-text scope it can analyze and verify.
+
+## What Venue Agent does
+
+Venue Agent runs a closed loop rather than stopping at advice:
+
+1. Upload a PPTX or load the project-owned demo.
+2. Describe the venue and viewing setup.
+3. Analyze supported structural text against the reference profile.
+4. Generate only server-approved repair candidates.
+5. Select a safe combination under the user's constraints.
+6. Simulate the combined change and show the exact plan.
+7. Require explicit approval.
+8. Apply the approved repair to a **copy**, never the original.
+9. Reopen and re-analyze the saved output before returning `VERIFIED` or `REVIEW_REQUIRED`.
+
+The result is a reviewable artifact, not an opaque “fixed your deck” promise.
+
+## Try it
+
+**Live:** [https://venue-agent-production.up.railway.app](https://venue-agent-production.up.railway.app)
+
+No Gemini key is required for the core demo. If an optional Gemini planner is unavailable, the deterministic planner fallback keeps the bounded workflow available.
+
+### 60-second judge path
+
+1. Open the live demo and load the sample deck.
+2. Enter the venue settings and run analysis.
+3. Inspect the proposed bounded repair and its projected result.
+4. Approve the exact plan.
+5. Watch the service create a copy, reopen it, and verify the saved artifact.
+
+The planner recommends. The verifier decides.
+
+## Why Agentic AI?
+
+The agent is used where judgment is useful: selecting among several already-simulated, server-generated repair candidates while honoring repair constraints. It is not given arbitrary PowerPoint commands, arbitrary font sizes, or authority to certify its own output.
+
+```text
+deterministic facts
+→ bounded candidate generation
+→ agentic trade-off selection
+→ deterministic policy and simulation
+→ human approval
+→ deterministic mutation
+→ fresh saved-artifact verification
+```
+
+When configured, the optional Gemini planner receives bounded planning context and permitted candidate IDs. Its decision is canonicalized and checked against server-side candidates and constraints. If it fails, times out, or is not configured, a deterministic fallback planner makes a bounded choice instead. Safety never depends on model intelligence.
+
+Deterministic components own geometry, reference lookup, candidate legality, simulation, approval integrity, mutation, and final verification. **The agent can recommend a repair. It cannot certify its own work.**
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U[User: PPTX and venue constraints] --> I[Deterministic: secure intake]
+    I --> A[Deterministic: structural analysis]
+    A --> C[Deterministic: bounded candidates]
+    C --> P[Optional AI planner: candidate IDs only]
+    C -. planner unavailable .-> F[Deterministic fallback planner]
+    P --> G[Deterministic: simulation and policy guard]
+    F --> G
+    G --> H[Human: approve exact plan]
+    H --> M[Deterministic: copy-only mutation]
+    M --> V[Deterministic: reopen and verify saved output]
+    V --> O[VERIFIED or REVIEW_REQUIRED]
+```
+
+The labels identify the authority boundary: the AI planner selects from a bounded set; deterministic services and the user retain control over every consequential operation.
+
+## Trust loop
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant A as Analyzer
+    participant P as Planner
+    participant G as Policy guard
+    participant X as Copy executor
+    participant V as Saved-output verifier
+
+    U->>A: PPTX and venue constraints
+    A->>P: bounded facts and candidate IDs
+    P->>G: selected candidate IDs
+    G->>U: exact plan, simulation, and plan hash
+    U->>G: approve the displayed plan hash
+    G->>X: execute approved plan on a copy only
+    X->>V: saved output artifact
+    V-->>U: VERIFIED or REVIEW_REQUIRED
+```
+
+Approval is not a vague “yes.” The approval hash binds the source digest, selected candidate snapshots, constraints, and plan simulation. Replanning clears stale approval and output state; execution also checks source identity and idempotency.
+
+## Trust model
+
+- **The original stays untouched.** Approved mutations write `output.pptx` in an ephemeral session; the source SHA-256 is checked during verification.
+- **Approval is exact.** A changed source, plan, candidate snapshot, constraint set, or simulation invalidates what can be approved.
+- **Unknown does not become safe.** Unsupported, outside-reference, boundary, or otherwise uncovered visible content prevents a whole-deck `VERIFIED` result.
+- **AI has bounded authority.** The planner can select only legal, server-generated candidates; policy and simulation validate the selection again.
+- **The saved output is checked.** Verification reopens the saved PPTX, renders and re-analyzes it, audits structural transitions, and checks required postconditions from the artifact—not planner predictions.
+- **Output identity is bound.** The downloadable bytes are SHA-256-bound to the verified output artifact.
+- **Presentation text is data.** Slide content is treated as untrusted input, not as privileged instructions to the planner.
+
+## What `VERIFIED` means
+
+`VERIFIED` is a narrow product state, not a certification. It means the saved output passed Venue Agent's defined postconditions for the supported analysis scope: the source remained unchanged; the output reopened; visible text was preserved; targeted structural values improved; the analyzed universe and layout remained safe; and no unknown or uncovered condition remained that blocks verification.
+
+It is **not** a human-readability guarantee, accessibility or WCAG conformance finding, AVIXA certification, or proof that LibreOffice rendering is identical to Microsoft PowerPoint.
+
+## When the agent refuses
+
+Refusal and review are intended product outcomes. Venue Agent can return a terminal non-success state when there is no justified automatic action:
+
+- unsupported or uncovered visible content leads to `REVIEW_REQUIRED` rather than a whole-deck `VERIFIED`;
+- title and heading candidates are never automatically mutated;
+- uncertain font inheritance, AutoFit, mapping, or analysis boundaries remain review-only;
+- constraints that leave no safe combined repair produce `NO_FEASIBLE_PLAN`;
+- a deck with adequate, fully covered supported text can return `NO_ACTION_REQUIRED`;
+- a rejected or stale plan produces no mutation.
+
+## How this differs from presentation AI
+
+These are workflow categories, not claims about any particular vendor or product.
+
+| Tool category | Primary focus | Physical venue in the repair loop | Bounded repair and approval | Saved-artifact verification |
+|---|---|---:|---:|---:|
+| Generic presentation AI | Content or visual authoring | Not its defining workflow | Varies | Varies |
+| Font-size checker | Slide-level typography | Usually absent | Usually advisory | Usually absent |
+| Display or room calculator | Display and viewing geometry | Yes | No deck mutation loop | No PPTX verification loop |
+| **Venue Agent** | Existing PPTX × venue × constraints | Yes | Yes | Yes, for its supported scope |
+
+The difference is the complete loop: **actual presentation structure × physical venue × bounded repair × explicit approval × saved-output verification**.
+
+## Supported scope
+
+Venue Agent deliberately limits what it will mutate. This is a safety boundary, not a claim that the rest of a deck is unimportant.
+
+| Content | Analysis | Automatic repair | Final behavior |
+|---|---|---|---|
+| Ordinary horizontal body text with explicit font family and size | Structural-text analysis | Bounded font scaling | Eligible for verification when all postconditions hold |
+| Titles and headings | May be identified and analyzed | Never automatic | Protected; review or no feasible automated plan |
+| Inherited fonts, AutoFit, rotated text, or ambiguous mappings | Limited or review-only | No | Review required |
+| Tables and grouped content | Unsupported coverage | No | Review required |
+| Charts, pictures, SmartArt, diagrams, media, embedded or OLE content | Unsupported visible-content coverage; unsafe packages may be rejected at intake | No | Review required or upload rejected |
+| Master/layout text outside the supported mapping | Unsupported coverage | No | Review required |
+
+The system does not perform semantic rewriting in this version. It does not analyze OCR/image text, charts, arbitrary rotations, right-to-left or non-Latin shaping, lighting, glare, contrast, or individual visual acuity.
+
+## Responsible intake and runtime design
+
+PPTX files are untrusted input. The service applies bounded upload and request sizes, OOXML package and relationship validation, decompression/resource limits, and rejects unsafe package features such as embedded OLE/ActiveX content and external linked resources. It uses capability-protected, process-local ephemeral sessions, restrictive artifact permissions where supported, cache-control protections, cleanup, and serialized session operations.
+
+LibreOffice rendering runs with dedicated temporary profiles, timeouts, concurrency limits, and stale-render protection. The container runs the service as a non-root user. Venue Agent does not claim general process or network sandboxing for LibreOffice; that remains a deployment risk to assess for a broader production environment.
+
+## Technical architecture
+
+**Backend and analysis:** FastAPI and Pydantic coordinate the workflow; `python-pptx` parses and mutates supported text; LibreOffice headless produces rendering evidence; PyMuPDF reads the generated PDF; and a named public BDM-derived reference profile supplies the comparison basis.
+
+**Planning:** deterministic analysis and candidate generation precede an optional, bounded Gemini planner. The fallback planner is deterministic. Neither planner issues raw mutation commands.
+
+**Integrity:** plan hashes, source SHA-256 checks, candidate snapshots, simulation fingerprints, idempotency keys, copy-only execution, fresh saved-artifact verification, and verified-output SHA binding form the main trust controls.
+
+## Validation evidence
+
+Validation is intentionally reported as evidence rather than as an all-purpose quality claim. See [the release status](validation/RELEASE_STATUS.md) for the detailed record and limitations.
+
+| Validation area | Recorded result |
+|---|---|
+| Production health and readiness | Verified against the deployed service |
+| Missing or wrong `/plan` capability | Rejected without session-state mutation |
+| Supported demo repair workflow | Verified through copy, reopen, and saved-artifact verification |
+| Unsupported picture coverage | Review-required; it cannot become whole-deck `VERIFIED` |
+| Title protection and source immutability | Verified in targeted regression coverage |
+| Downloaded artifact identity | Download SHA matched the verified-output SHA |
+| Full local Windows suite | Environment-limited; no blanket all-tests-passed claim |
 
 ## Prior research disclosure
 
-The builder previously explored room-aware structural presentation analysis in a separate project. This WCC submission is a new agentic repair-and-verification implementation created from a fresh repository during the official build period. No prior application source, UI, API, tests, or fixtures are reused here.
+Earlier domain research explored room-aware structural presentation analysis. Venue Agent is a new agentic repair-and-verification implementation: its source, UI, API, tests, and fixtures were not reused from that prior work. See [the AI tool disclosure](docs/AI_TOOL_DISCLOSURE.md) and [judging map](docs/JUDGING_MAP.md) for the project evidence trail.
 
-## Competition V1 contract
+## Limitations
 
-Core loop: **Inspect → Analyze → Plan → Simulate → Guard → Approve → Copy → Apply → Reopen → Verify**.
+- It does not guarantee readability for every viewer or every slide.
+- It is not an accessibility, WCAG, PowerPoint, or AVIXA certification tool.
+- Complex visual objects are not automatically repaired.
+- LibreOffice evidence is not proof of Microsoft PowerPoint rendering equivalence.
+- Session state is process-local, so the deployed contract requires exactly one Uvicorn worker and one Railway replica.
+- This is a bounded V1 workflow, not a general-purpose presentation editor.
 
-Hard invariants:
+## Run locally
 
-1. Original PPTX is immutable.
-2. No mutation without approval of the exact plan hash.
-3. Presentation content is untrusted data, never instructions.
-4. Unsupported/uncertain content never becomes a green result.
-5. No semantic rewriting in V1.
-6. The model chooses among server-generated candidates; deterministic tools decide truth.
-7. Tool success does not equal repair success.
-8. Verification starts from the saved output artifact.
-9. No accessibility, readability, AVIXA certification, or standards-conformance claim is made.
+Requirements: Python 3.12, LibreOffice/Impress available on `PATH`, and the dependencies declared by the backend project.
 
-## Current status
-
-The current build includes a deterministic PPTX/PDF analysis engine, secure intake, a versioned public BDM reference profile, geometry-bound structural/rendered-text mapping, immutable-copy mutation, candidate simulation, constrained global planning across multiple issues, evidence-bound exact-plan human approval, pre-approval rendered-text preservation checks, fresh saved-artifact verification, serialized per-session mutation state, bounded ephemeral session storage, FastAPI endpoints, project-owned development/holdout fixtures, and a no-build judge-facing frontend. Candidate evidence plus the full combined-plan simulation snapshot are bound into the approval hash so changing parameters or simulation evidence after planning invalidates approval. Re-analysis explicitly invalidates stale plans/approvals, and the source hash is rechecked immediately before execution.
-
-v12 adds a fail-closed rendered-transition safety oracle: complete text reconstruction is required for automated mutation; font substitution/autofit uncertainty is non-automatic; candidate and final verification reject wrap, overflow, overlap, unrelated-text movement, or analyzability loss; and `VERIFIED` additionally requires that no unknown/outside-reference/unsupported-content condition remains. Pictures, charts, SmartArt/diagram graphics, media/OLE visuals, and inherited master/layout text are explicit unsupported coverage in V1 and therefore cannot silently receive a whole-deck `VERIFIED` result.
-
-v13 hardened the package/runtime boundary before planning: intake rejects non-OOXML ZIPs, non-canonical part paths, embedded OLE/ActiveX/package payloads, disguised absolute-URI relationship targets, suspicious compression ratios, oversized slide XML, and excessive slide text/run counts before LibreOffice rendering. Rendered PDFs and extracted text spans are bounded.
-
-v14 hardens the public runtime boundary: session IDs are non-secret handles and every session operation requires a separate `X-Venue-Token` capability; session operations use an idle/sliding TTL with active-operation leases plus proactive background cleanup; the global session map never waits on a per-session lock; LibreOffice work has a process-wide concurrency budget and whole-process-group timeout cancellation; request bytes are bounded before multipart parsing; API/output responses are `no-store`; browser `sessionStorage` supports refresh recovery; deep readiness proves a real demo render; the optional Gemini planner has a bounded SDK timeout plus deterministic circuit-breaker fallback; and competition V1 explicitly requires one process/one deployment replica because session state remains process-local.
-
-## Local backend
-
-```bash
+```powershell
 cd backend
-python -m uvicorn app.main:app --reload --port 8000
+python -m pip install -e ".[agent]"
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
-## Judge UI
+Open `http://127.0.0.1:8000`. The frontend is served by the FastAPI application. `GEMINI_API_KEY` is optional; without it, the deterministic planner fallback is used.
 
-The backend serves a no-build static judge UI at `/`; no Node/npm toolchain is required for the competition release path. The judge UI supports editable venue inputs and repair constraints, exposes unresolved issues, provides exact-plan Approve/Reject controls, and lets the user explicitly delete the session and its artifacts.
+Useful repository checks from the repository root include:
 
-## Tests
-
-```bash
+```powershell
 cd backend
-pytest -q
-```
-
-## Competition evidence
-
-- `docs/JUDGING_MAP.md` maps implemented evidence to the WCC scoring criteria.
-- `docs/DEMO_SCRIPT.md` provides the 2–3 minute judge walkthrough.
-- `docs/AI_TOOL_DISCLOSURE.md` records runtime AI boundaries and must be updated with every significant development AI tool actually used.
-- `validation/RELEASE_STATUS.md` records the current verified and unverified release claims.
-
-
-## Important limitations
-
-V1 only auto-mutates ordinary, horizontal, structurally mapped body text with explicit font sizing and conservative eligibility checks. Titles and heading-like elements are always review-only. SmartArt, charts, images, media/OLE visuals, unsupported rotations, ambiguous mappings, inherited master/layout text, and uncertain font/autofit behavior are review-only or not analyzed; their presence prevents a whole-deck `VERIFIED` result. Venue results are model/reference outputs, not predictions of individual human readability.
-
-## Optional bounded AI planner
-
-Set `GEMINI_API_KEY` to enable the optional Gemini planner; `GEMINI_MODEL` defaults to `gemini-3.8-flash`. The model receives only bounded, already-safe candidate/simulation metadata, aggregate planning context, and constraints—never presentation instructions/content. It can propose only server-generated candidate IDs. Coverage, unresolved issues, and review status are recomputed server-side; the model cannot self-certify them. The client uses a bounded request timeout (`GEMINI_TIMEOUT_MS`, default 8000 ms); failures open a short circuit and fall back deterministically instead of holding a session lock indefinitely. Planner provenance/fallback reason is exposed in the plan result.
-
-
-## Deployment readiness
-
-The competition path is a single FastAPI/Uvicorn service serving both API and judge UI. The Dockerfile installs LibreOffice Impress plus DejaVu Sans, runs as a non-root user, uses exactly one worker, disables Uvicorn access logs, and health-checks `/health/deep-readiness`, which performs a cached real demo render. Project-owned demo and validation decks explicitly use DejaVu Sans to avoid theme-font substitution in the container. **Deploy exactly one replica** for competition V1; process-local sessions are intentionally not a multi-replica architecture.
-
-Local production-command smoke:
-
-```bash
-python scripts/http_smoke.py
+python -m pytest -q
+cd ..
 python scripts/check_frontend_js.py
-```
-
-Container runtime verification still needs to be performed on a machine/platform with Docker or an equivalent runtime.
-
-## Release gate
-
-```bash
 python scripts/release_gate.py
-# full isolated renderer/adversarial resource suite:
-python scripts/release_gate.py --full
 ```
 
-For a clean source-commit-bound release candidate, commit all intended source first and run:
+## Deployment contract
 
-```bash
-python scripts/release_candidate.py
-```
+The deployed application is one FastAPI/Uvicorn service with frontend static files served by the backend and LibreOffice available for rendering. The Docker configuration runs one Uvicorn worker; Railway readiness checks use `/health/readiness`. Keep the service at **one replica** because session state is intentionally process-local.
 
-The RC command refuses a dirty tree, scans tracked text files for obvious secrets, verifies required documentation, reruns the mandatory release gate plus HTTP/UI smokes, then writes an ignored JSON report under `validation/reports/` so evidence generation does not mutate the verified source commit.
+## Repository evidence
 
-
-## Privacy / artifact lifecycle
-
-Uploaded and generated presentation artifacts are process-local and ephemeral. Competition V1 defaults to a 45-minute **idle** TTL and a maximum of 24 sessions. Active/queued operations lease the session and refresh the idle deadline; a background reaper proactively removes expired artifacts even if the service receives no further request. Startup cleanup removes only Venue Agent-owned session directories under a marker-protected dedicated root. Session directories/files use private permissions (`0700`/`0600`). The URL contains only a non-secret random session ID; authorization requires a separate high-entropy `X-Venue-Token` capability that is stored in browser `sessionStorage`, never embedded in session URLs, and not displayed by the judge UI. Original filenames are never used as filesystem paths.
+- [Product contract](docs/PRODUCT_CONTRACT.md)
+- [Claims and limitations](docs/CLAIMS_AND_LIMITATIONS.md)
+- [Demo script](docs/DEMO_SCRIPT.md)
+- [Judging map](docs/JUDGING_MAP.md)
+- [AI tool disclosure](docs/AI_TOOL_DISCLOSURE.md)
+- [Release status](validation/RELEASE_STATUS.md)
