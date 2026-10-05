@@ -26,7 +26,7 @@ Hard invariants:
 
 The current build includes a deterministic PPTX/PDF analysis engine, secure intake, a versioned public BDM reference profile, geometry-bound structural/rendered-text mapping, immutable-copy mutation, candidate simulation, constrained global planning across multiple issues, evidence-bound exact-plan human approval, pre-approval rendered-text preservation checks, fresh saved-artifact verification, serialized per-session mutation state, bounded ephemeral session storage, FastAPI endpoints, project-owned development/holdout fixtures, and a no-build judge-facing frontend. Candidate evidence plus the full combined-plan simulation snapshot are bound into the approval hash so changing parameters or simulation evidence after planning invalidates approval. Re-analysis explicitly invalidates stale plans/approvals, and the source hash is rechecked immediately before execution.
 
-v12 adds a fail-closed rendered-transition safety oracle: complete text reconstruction is required for automated mutation; font substitution/autofit uncertainty is non-automatic; candidate and final verification reject wrap, overflow, overlap, unrelated-text movement, or analyzability loss; and `VERIFIED` additionally requires that no unknown/outside-reference/unsupported-content condition remains.
+v12 adds a fail-closed rendered-transition safety oracle: complete text reconstruction is required for automated mutation; font substitution/autofit uncertainty is non-automatic; candidate and final verification reject wrap, overflow, overlap, unrelated-text movement, or analyzability loss; and `VERIFIED` additionally requires that no unknown/outside-reference/unsupported-content condition remains. Pictures, charts, SmartArt/diagram graphics, media/OLE visuals, and inherited master/layout text are explicit unsupported coverage in V1 and therefore cannot silently receive a whole-deck `VERIFIED` result.
 
 v13 hardened the package/runtime boundary before planning: intake rejects non-OOXML ZIPs, non-canonical part paths, embedded OLE/ActiveX/package payloads, disguised absolute-URI relationship targets, suspicious compression ratios, oversized slide XML, and excessive slide text/run counts before LibreOffice rendering. Rendered PDFs and extracted text spans are bounded.
 
@@ -60,7 +60,7 @@ pytest -q
 
 ## Important limitations
 
-V1 only auto-mutates ordinary, horizontal, structurally mapped text shapes with explicit font sizing and conservative eligibility checks. SmartArt, charts, image text, unsupported rotations, ambiguous mappings, and uncertain font/autofit behavior are review-only or not analyzed. Venue results are model/reference outputs, not predictions of individual human readability.
+V1 only auto-mutates ordinary, horizontal, structurally mapped body text with explicit font sizing and conservative eligibility checks. Titles and heading-like elements are always review-only. SmartArt, charts, images, media/OLE visuals, unsupported rotations, ambiguous mappings, inherited master/layout text, and uncertain font/autofit behavior are review-only or not analyzed; their presence prevents a whole-deck `VERIFIED` result. Venue results are model/reference outputs, not predictions of individual human readability.
 
 ## Optional bounded AI planner
 

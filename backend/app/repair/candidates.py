@@ -8,6 +8,10 @@ def generate_candidates(analysis: AnalysisResult) -> list[RepairCandidate]:
     for r in analysis.results:
         if r.state != ComparisonState.BELOW_TARGET:
             continue
+        # Competition V1 never auto-mutates titles or heading-like elements.
+        # This is policy, not a client preference.
+        if r.element.role == "TITLE":
+            continue
         if r.element.mutation_capability != MutationCapability.SAFE_MUTATION:
             continue
         if not r.deficit_ratio:

@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 import pytest
+import hashlib
 
 from app.main import app
 
@@ -17,6 +18,44 @@ def _planned_session(client, project_root):
     r = client.post(f'/api/sessions/{sid}/plan', headers=headers, json={'constraints': {'max_mutations': 1, 'max_scale_factor': 1.6, 'minimum_target_coverage': 0.9, 'protect_titles': True, 'semantic_rewrite': False}})
     assert r.status_code == 200
     return sid, headers, r.json()
+
+
+def test_plan_requires_capability_and_cannot_change_session_state(project_root):
+    """Planning is session-sensitive: an untrusted handle must be inert."""
+    from app.main import STORE
+
+    with TestClient(app) as c:
+        src = project_root / "backend/tests/fixtures/small_text.pptx"
+        with src.open("rb") as f:
+            created = c.post(
+                "/api/upload",
+                files={"file": ("small_text.pptx", f, "application/vnd.openxmlformats-officedocument.presentationml.presentation")},
+            )
+        sid = created.json()["session_id"]
+        headers = {"X-Venue-Token": created.json()["session_token"]}
+        analyzed = c.post(
+            f"/api/sessions/{sid}/analyze",
+            headers=headers,
+            json={"venue": {"active_image_height_m": 1.8, "farthest_viewer_distance_m": 10.8, "measurement_basis": "MEASURED"}},
+        )
+        assert analyzed.status_code == 200
+        before = STORE.get(sid)
+        before_state = before.state
+        before_candidates = list(before.candidates)
+
+        payload = {"constraints": {"max_mutations": 1, "max_scale_factor": 1.6, "minimum_target_coverage": 0.9, "protect_titles": True, "semantic_rewrite": False}}
+        for unauthorized_headers in ({}, {"X-Venue-Token": "wrong-token"}):
+            response = c.post(f"/api/sessions/{sid}/plan", headers=unauthorized_headers, json=payload)
+            assert response.status_code == 404
+            after = STORE.get(sid)
+            assert after.state == before_state
+            assert after.plan_hash is None
+            assert after.approved_plan_hash is None
+            assert after.output_path is None
+            assert after.candidates == before_candidates
+
+        authorized = c.post(f"/api/sessions/{sid}/plan", headers=headers, json=payload)
+        assert authorized.status_code == 200
 
 
 def test_stale_plan_hash_cannot_execute(project_root):
@@ -148,3 +187,51 @@ def test_source_tamper_is_blocked_before_any_mutation(project_root):
         assert session.state == 'AWAITING_APPROVAL'
         assert session.output_path is None
         assert not (session.root / 'output.pptx').exists()
+
+
+def _verified_output_session(project_root):
+    from app.main import STORE
+    content = b"verified-output-bytes"
+    s = STORE.create("source.pptx", b"source", hashlib.sha256(b"source").hexdigest())
+    token = s.take_issued_capability_token()
+    output = s.root / "output.pptx"
+    output.write_bytes(content)
+    s.output_path = output
+    s.verified_output_sha256 = hashlib.sha256(content).hexdigest()
+    from app.domain.models import WorkflowState
+    s.state = WorkflowState.VERIFIED
+    return s, {"X-Venue-Token": token}, content
+
+
+def test_verified_download_serves_exact_verified_byte_snapshot(project_root):
+    with TestClient(app) as c:
+        s, headers, content = _verified_output_session(project_root)
+        response = c.get(f"/api/sessions/{s.session_id}/output", headers=headers)
+        assert response.status_code == 200
+        assert response.content == content
+
+
+@pytest.mark.parametrize("replacement", [b"modified-after-verification", None])
+def test_changed_or_deleted_verified_output_is_never_downloaded(project_root, replacement):
+    with TestClient(app) as c:
+        s, headers, _ = _verified_output_session(project_root)
+        if replacement is None:
+            s.output_path.unlink()
+        else:
+            s.output_path.write_bytes(replacement)
+        response = c.get(f"/api/sessions/{s.session_id}/output", headers=headers)
+        assert response.status_code in {404, 409}
+        if replacement is not None:
+            assert s.state.value == "FAILED"
+            assert s.output_path is None
+
+
+def test_stale_output_path_is_never_downloaded(project_root):
+    with TestClient(app) as c:
+        s, headers, _ = _verified_output_session(project_root)
+        stale = s.root / "stale.pptx"
+        stale.write_bytes(b"different artifact")
+        s.output_path = stale
+        response = c.get(f"/api/sessions/{s.session_id}/output", headers=headers)
+        assert response.status_code == 409
+        assert s.state.value == "FAILED"

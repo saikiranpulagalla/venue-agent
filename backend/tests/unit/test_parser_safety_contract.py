@@ -1,6 +1,8 @@
 from pathlib import Path
 import tempfile
 
+import pytest
+
 from pptx import Presentation
 from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.util import Inches, Pt
@@ -40,6 +42,34 @@ def test_manual_prominent_top_text_is_conservatively_recognized_as_title():
         prs.save(path)
         rec = parse_pptx_shapes(path)[0]
     assert rec.role == "TITLE"
+
+
+@pytest.mark.parametrize("text,top,size", [
+    ("Manual 22pt heading", 2.0, 22),
+    ("\u0645\u0631\u062d\u0628\u0627 \u0628\u0627\u0644\u062d\u0636\u0648\u0631", 2.0, 22),
+])
+def test_short_manual_heading_in_top_third_is_recognized_as_title(text, top, size):
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "manual-heading.pptx"
+        prs = Presentation(); prs.slide_width = Inches(13.333); prs.slide_height = Inches(7.5)
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        box = slide.shapes.add_textbox(Inches(1), Inches(top), Inches(8), Inches(0.6))
+        _run(box, text, size=size)
+        prs.save(path)
+        rec = parse_pptx_shapes(path)[0]
+    assert rec.role == "TITLE"
+
+
+def test_large_body_text_is_not_broadly_reclassified_as_title():
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "large-body.pptx"
+        prs = Presentation(); prs.slide_width = Inches(13.333); prs.slide_height = Inches(7.5)
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        box = slide.shapes.add_textbox(Inches(1), Inches(2), Inches(10), Inches(2))
+        _run(box, "A large body paragraph with more than fourteen words to avoid heading classification safely today", size=24)
+        prs.save(path)
+        rec = parse_pptx_shapes(path)[0]
+    assert rec.role == "BODY"
 
 
 def test_table_text_is_surfaced_as_unsupported_visible_content():

@@ -64,6 +64,7 @@ class Session:
     approved_plan_hash: str | None = None
     used_idempotency_keys: set[str] = field(default_factory=set)
     output_path: Path | None = None
+    verified_output_sha256: str | None = None
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
     active_operations: int = 0
     delete_requested: bool = False
@@ -87,6 +88,7 @@ class Session:
                 self.output_path.unlink(missing_ok=True)
             (self.root / "output.pptx").unlink(missing_ok=True)
             self.output_path = None
+            self.verified_output_sha256 = None
 
     def clear_derived_state(self, *, remove_output: bool = False) -> None:
         self.candidates = []

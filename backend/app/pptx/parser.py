@@ -50,6 +50,43 @@ class ShapeRecord:
     unsupported_visible_content: bool = False
 
 
+# These objects can contain text, obscure text, or otherwise materially alter a
+# slide's visual layout. V1 deliberately does not attempt to interpret them.
+# Their presence must still be part of the verification universe so a repair of
+# another shape cannot become a whole-deck VERIFIED result by omission.
+_UNSUPPORTED_VISIBLE_SHAPE_TYPES = {
+    "CHART",
+    "PICTURE",
+    "MEDIA",
+    "EMBEDDED_OLE_OBJECT",
+    "LINKED_OLE_OBJECT",
+    "OLE_OBJECT",
+    "IGX_GRAPHIC",  # SmartArt/diagram graphic in python-pptx
+    "SMART_ART",
+    "DIAGRAM",
+    "GRAPHIC_FRAME",
+    "CANVAS",
+    "FREEFORM",
+    "CALLOUT",
+    "LINE",
+    "CONNECTOR",
+}
+
+
+def _shape_type_name(shape) -> str:
+    value = getattr(shape, "shape_type", None)
+    name = getattr(value, "name", None)
+    raw = str(name or value or "").upper()
+    # python-pptx releases expose either enum.name or strings such as
+    # "CHART (3)". Keep the policy stable across both representations.
+    return raw.split(" ", 1)[0].split("(", 1)[0]
+
+
+def _unsupported_visual_kind(shape) -> str | None:
+    kind = _shape_type_name(shape)
+    return kind.casefold() if kind in _UNSUPPORTED_VISIBLE_SHAPE_TYPES else None
+
+
 def _placeholder_role(shape) -> str | None:
     try:
         if not shape.is_placeholder:
@@ -76,9 +113,20 @@ def _role(shape, slide_h: float, explicit_sizes: list[float]) -> str:
     if getattr(shape, "has_text_frame", False):
         top_ratio = float(getattr(shape, "top", 0) or 0) / max(slide_h, 1.0)
         max_size = max(explicit_sizes, default=0.0)
-        # Conservative V1 heuristic for manually-created semantic headings.
-        # A false positive only prevents automation; a false negative can mutate a title.
-        if top_ratio <= 0.22 and max_size >= 24.0:
+        text = normalize_text(getattr(shape, "text", "") or "")
+        paragraph_count = sum(
+            1 for p in shape.text_frame.paragraphs if normalize_text(getattr(p, "text", "") or "")
+        )
+        # Conservative V1 heuristic for manually-created headings. It is
+        # deliberately limited to short, top-third labels so a normal large
+        # body paragraph is not broadly reclassified. False positives are
+        # review-only; false negatives could mutate a protected heading.
+        if (
+            top_ratio <= 0.35
+            and max_size >= 20.0
+            and paragraph_count <= 2
+            and len(text.split()) <= 14
+        ):
             return "TITLE"
         if top_ratio >= 0.84 and max_size <= 18.0:
             return "FOOTER"
@@ -172,6 +220,23 @@ def parse_pptx_shapes(source: Path) -> list[ShapeRecord]:
         if len(out) > MAX_STRUCTURAL_TEXT_ELEMENTS:
             raise ParserLimitError(f"structural_text_element_limit_exceeded:{MAX_STRUCTURAL_TEXT_ELEMENTS}")
 
+    def append_unsupported(
+        *, slide_index: int, shape_id: int, bbox: tuple[float, float, float, float], kind: str, text: str = ""
+    ) -> None:
+        append_record(ShapeRecord(
+            slide_index=slide_index,
+            shape_id=shape_id,
+            text=text or f"[unsupported visible {kind}]",
+            normalized_text=normalize_text(text),
+            role="OTHER",
+            explicit_font_sizes_pt=[],
+            mutation_capability=MutationCapability.NO_MUTATION,
+            notes=[f"unsupported_visible_{kind}"],
+            normalized_bbox=bbox,
+            force_not_analyzable=True,
+            unsupported_visible_content=True,
+        ))
+
     for si, slide in enumerate(prs.slides):
         for shape in slide.shapes:
             if getattr(shape, "has_text_frame", False):
@@ -198,19 +263,52 @@ def parse_pptx_shapes(source: Path) -> list[ShapeRecord]:
             unsupported_text = _table_text(shape) or _group_text(shape)
             if unsupported_text.strip():
                 kind = "table" if getattr(shape, "has_table", False) else "group"
-                append_record(ShapeRecord(
+                append_unsupported(
                     slide_index=si,
                     shape_id=shape.shape_id,
+                    bbox=_shape_bbox(shape, slide_w, slide_h),
+                    kind=f"{kind}_text",
                     text=unsupported_text,
-                    normalized_text=normalize_text(unsupported_text),
-                    role="OTHER",
-                    explicit_font_sizes_pt=[],
-                    mutation_capability=MutationCapability.NO_MUTATION,
-                    notes=[f"unsupported_visible_{kind}_text"],
-                    normalized_bbox=_shape_bbox(shape, slide_w, slide_h),
-                    force_not_analyzable=True,
-                    unsupported_visible_content=True,
-                ))
+                )
+                continue
+
+            kind = _unsupported_visual_kind(shape)
+            if kind:
+                append_unsupported(
+                    slide_index=si,
+                    shape_id=shape.shape_id,
+                    bbox=_shape_bbox(shape, slide_w, slide_h),
+                    kind=kind,
+                )
+
+        # python-pptx exposes only slide-local shapes above. Static text on a
+        # layout or master can still render on the slide; record it as unknown
+        # rather than incorrectly claiming whole-deck coverage. Synthetic IDs
+        # cannot collide with real PowerPoint shape IDs and are never mutable.
+        inherited_seen: set[tuple[str, int]] = set()
+        inherited_id = 1
+        for owner, prefix in ((slide.slide_layout, "layout"), (slide.slide_layout.slide_master, "master")):
+            for shape in owner.shapes:
+                # Built-in layout/master placeholders commonly contain template
+                # editing prompts. They are not static inherited slide content;
+                # effective user placeholder text is represented on the slide.
+                if getattr(shape, "is_placeholder", False):
+                    continue
+                text = (getattr(shape, "text", "") or "").strip() if getattr(shape, "has_text_frame", False) else ""
+                if not text:
+                    continue
+                key = (prefix, int(getattr(shape, "shape_id", 0) or 0))
+                if key in inherited_seen:
+                    continue
+                inherited_seen.add(key)
+                append_unsupported(
+                    slide_index=si,
+                    shape_id=-(100000 + inherited_id),
+                    bbox=_shape_bbox(shape, slide_w, slide_h),
+                    kind=f"inherited_{prefix}_text",
+                    text=text,
+                )
+                inherited_id += 1
     return out
 
 

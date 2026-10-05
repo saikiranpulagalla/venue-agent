@@ -30,7 +30,10 @@ def _candidate_allowed(c: RepairCandidate, constraints: RepairConstraints) -> bo
         return False
     if float(c.parameters.get("scale", 99)) > constraints.max_scale_factor:
         return False
-    if constraints.protect_titles and c.issue_role == "TITLE":
+    # Defense in depth: even a forged/stale candidate cannot make a protected
+    # heading executable. `protect_titles` is retained for API compatibility,
+    # but cannot weaken the competition V1 policy.
+    if c.issue_role == "TITLE":
         return False
     if c.predicted_state is None:
         return False

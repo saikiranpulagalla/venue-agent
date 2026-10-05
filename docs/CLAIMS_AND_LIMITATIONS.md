@@ -7,7 +7,7 @@ This prototype compares structurally supported rendered text elements against a 
 - AVIXA certification or conformance with the complete current ANSI/AVIXA standard;
 - analysis of OCR/image text, charts, SmartArt, arbitrary rotations, RTL/non-Latin shaping, lighting, glare, contrast, or individual visual acuity.
 
-The public reference profile is versioned and cited in `reference/PUBLIC_BDM_REFERENCE_V1.json`.
+The public reference profile is versioned and cited in `reference/PUBLIC_BDM_REFERENCE_V1.json`. Pictures, charts, SmartArt/diagram graphics, media/OLE visuals, and inherited master/layout text are detected as unsupported coverage when present. They are not semantically analyzed; their presence prevents a whole-deck `VERIFIED` result in competition V1.
 
 
 Runtime/deployment limits:

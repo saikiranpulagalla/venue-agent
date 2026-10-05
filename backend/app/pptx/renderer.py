@@ -100,8 +100,11 @@ def render_pptx_to_pdf(source: Path, out_dir: Path, timeout_s: int = 30) -> Path
             try:
                 proc = subprocess.Popen(
                     cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    # LibreOffice diagnostics are not presentation evidence and
+                    # an untrusted input must not be able to grow Python memory
+                    # through an unbounded captured renderer log.
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     text=True,
                     start_new_session=(os.name == "posix"),
                 )
@@ -113,7 +116,7 @@ def render_pptx_to_pdf(source: Path, out_dir: Path, timeout_s: int = 30) -> Path
                 _terminate_process_tree(proc)
                 raise RenderError("LibreOffice render timeout") from e
         if proc.returncode != 0 or not pdf.exists():
-            raise RenderError(f"LibreOffice render failed: {stderr or stdout}")
+            raise RenderError("LibreOffice render failed")
         try:
             rendered_size = pdf.stat().st_size
         except OSError as e:

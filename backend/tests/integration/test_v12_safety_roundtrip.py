@@ -3,6 +3,8 @@ import tempfile
 
 import pytest
 from pptx import Presentation
+from pptx.chart.data import ChartData
+from pptx.enum.chart import XL_CHART_TYPE
 from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.util import Inches, Pt
 
@@ -166,3 +168,37 @@ def test_unknown_content_remaining_after_successful_target_repair_cannot_be_veri
         assert report.no_unknown_or_uncovered is False
         assert report.final_state == WorkflowState.REVIEW_REQUIRED
         assert 'unknown_or_uncovered_content_remains' in report.reasons
+
+
+@pytest.mark.parametrize("visual_kind", ["chart", "picture"])
+def test_unsupported_visible_content_can_never_be_silently_verified(project_root, visual_kind):
+    """A repairable text box does not erase coverage gaps from other visuals."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = td / f"known-plus-{visual_kind}.pptx"
+        out = td / f"known-plus-{visual_kind}-output.pptx"
+        prs = Presentation(); prs.slide_width = Inches(13.333); prs.slide_height = Inches(7.5)
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        target_shape = _add_box(slide, "Small supported text", 1, 1, 8, 1, 12)
+        if visual_kind == "chart":
+            data = ChartData(); data.categories = ["A", "B"]; data.add_series("Critical labels", (1, 2))
+            slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(1), Inches(4), Inches(5), Inches(2), data)
+        else:
+            # A project-owned one-pixel PNG. Its contents are irrelevant: the
+            # policy is that arbitrary pictures are outside structural coverage.
+            image = td / "decorative.png"
+            image.write_bytes(bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360f8cfc0000003010100c9fe92ef0000000049454e44ae426082"))
+            slide.shapes.add_picture(str(image), Inches(9), Inches(4), Inches(1), Inches(1))
+        prs.save(src)
+
+        analyzer = _analyzer(project_root)
+        venue = VenueProfile(active_image_height_m=1.8, farthest_viewer_distance_m=10.8, measurement_basis="MEASURED")
+        baseline = analyzer.analyze(src, venue, td / "baseline")
+        target = next(r for r in baseline.results if r.element.shape_id == target_shape.shape_id)
+        assert baseline.summary.unsupported_visible_content_elements == 1
+
+        apply_scale_text(src, out, target.element.slide_index, target.element.shape_id, 1.60)
+        report = verify_output(src, out, baseline, target.element.element_id, analyzer, td / "verify")
+        assert report.target_improved is True
+        assert report.no_unknown_or_uncovered is False
+        assert report.final_state == WorkflowState.REVIEW_REQUIRED

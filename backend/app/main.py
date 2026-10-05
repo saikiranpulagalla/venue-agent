@@ -363,7 +363,11 @@ def analyze(sid: str, req: AnalyzeRequest, _cap: None = Depends(_require_session
 
 
 @app.post("/api/sessions/{sid}/plan")
-def plan(sid: str, req: PlanRequest = PlanRequest()):
+def plan(
+    sid: str,
+    req: PlanRequest = PlanRequest(),
+    _cap: None = Depends(_require_session_capability),
+):
     try:
         with STORE.locked(sid) as s:
             if s.analysis is None:
@@ -569,9 +573,11 @@ def approve_and_apply(sid: str, req: ApproveRequest, _cap: None = Depends(_requi
                 raise HTTPException(422, f"Execution failed: {type(e).__name__}: {e}")
             if _verification_output_is_mechanically_safe(report):
                 s.output_path = output
+                s.verified_output_sha256 = report.output_sha256
             else:
                 output.unlink(missing_ok=True)
                 s.output_path = None
+                s.verified_output_sha256 = None
             s.state = report.final_state
             return {"state": s.state, "verification": report}
     except KeyError as e:
@@ -591,15 +597,30 @@ def delete_session(sid: str, _cap: None = Depends(_require_session_capability)):
 def download_output(sid: str, _cap: None = Depends(_require_session_capability)):
     try:
         with STORE.locked(sid) as s:
-            if s.output_path is None or not s.output_path.exists():
+            if s.output_path is None:
                 raise HTTPException(404, "No output available")
             if s.state not in {WorkflowState.VERIFIED, WorkflowState.REVIEW_REQUIRED}:
                 raise HTTPException(409, "Output is not in a downloadable terminal state")
-            # Snapshot the bounded output while the session lock is held. A
-            # concurrent re-analysis or explicit delete may remove the ephemeral
-            # file immediately after this point, but it cannot truncate an
-            # already-approved download response.
-            content = s.output_path.read_bytes()
+            if not s.output_path.exists():
+                s.output_path = None
+                s.verified_output_sha256 = None
+                s.state = WorkflowState.FAILED
+                raise HTTPException(409, "Verified output artifact is missing")
+            expected_path = (s.root / "output.pptx").resolve()
+            actual_path = s.output_path.resolve()
+            if actual_path != expected_path or not s.verified_output_sha256:
+                s.output_path = None
+                s.verified_output_sha256 = None
+                s.state = WorkflowState.FAILED
+                raise HTTPException(409, "Verified output identity is unavailable")
+            # Read once under the session lock, hash those exact bytes, and
+            # serve the same snapshot. This avoids hash-then-reread TOCTOU.
+            content = actual_path.read_bytes()
+            if hashlib.sha256(content).hexdigest() != s.verified_output_sha256:
+                s.output_path = None
+                s.verified_output_sha256 = None
+                s.state = WorkflowState.FAILED
+                raise HTTPException(409, "Verified output artifact changed after verification")
     except KeyError:
         raise HTTPException(404, "Unknown session")
     return Response(

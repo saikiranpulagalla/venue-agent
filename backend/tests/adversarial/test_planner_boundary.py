@@ -37,6 +37,19 @@ def test_title_protection_can_make_plan_infeasible():
     assert d.requires_human_review
 
 
+def test_titles_are_never_allowed_when_client_disables_title_protection():
+    candidates = [
+        RepairCandidate(candidate_id="title", issue_element_id="i1", operation="SCALE_TEXT", parameters={"scale": 1.2}, safe=True, simulation_fingerprint="sim", predicted_state=ComparisonState.MEETS_TARGET, issue_role="TITLE")
+    ]
+    d = DeterministicPlanner().choose(
+        candidates,
+        RepairConstraints(protect_titles=False, minimum_target_coverage=1.0),
+        ctx(analyzed=1, meets=0, below=1),
+    )
+    assert d.selected_candidate_ids == []
+    assert d.requires_human_review
+
+
 def test_global_plan_uses_two_distinct_issues_to_reach_target():
     candidates = [
         RepairCandidate(candidate_id="i1-small", issue_element_id="i1", operation="SCALE_TEXT", parameters={"scale":1.1}, safe=True, simulation_fingerprint="sim", predicted_state=ComparisonState.BELOW_TARGET, issue_role="BODY", actual_percent_before=1.0, actual_percent_after=1.1),

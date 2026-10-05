@@ -68,3 +68,28 @@ def test_rendered_pdf_size_is_bounded_and_oversize_artifact_removed(monkeypatch,
     with pytest.raises(RenderError, match="Rendered PDF size outside processing limits"):
         renderer.render_pptx_to_pdf(source, out_dir)
     assert not (out_dir / "source.pdf").exists()
+
+
+def test_failed_render_cannot_reuse_stale_pdf(monkeypatch, tmp_path: Path):
+    source = tmp_path / "source.pptx"
+    source.write_bytes(b"pptx")
+    out_dir = tmp_path / "render"
+    out_dir.mkdir()
+    stale = out_dir / "source.pdf"
+    stale.write_bytes(b"%PDF-stale")
+    monkeypatch.setattr(renderer.shutil, "which", lambda _: "/usr/bin/fake-soffice")
+
+    class FailingProc:
+        returncode = 1
+        pid = 999999
+        def __init__(self, cmd, **kwargs):
+            self.cmd = cmd
+        def communicate(self, timeout=None):
+            return "", ""
+        def poll(self):
+            return 1
+
+    monkeypatch.setattr(renderer.subprocess, "Popen", FailingProc)
+    with pytest.raises(RenderError, match="LibreOffice render failed"):
+        renderer.render_pptx_to_pdf(source, out_dir)
+    assert not stale.exists()

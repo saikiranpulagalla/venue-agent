@@ -29,3 +29,5 @@ Given a PPTX, a venue profile, and user constraints, identify structurally suppo
 - INV-18 The runtime must bound concurrent renderer work and terminate the full renderer process group on timeout.
 - INV-19 Competition V1 is a single-worker, single-replica process-local session deployment.
 - INV-20 API and repaired-artifact responses containing private session data are non-cacheable.
+- INV-21 Titles and heading-like elements are never automatically mutated in competition V1.
+- INV-22 `VERIFIED` requires explicit coverage of unsupported visible constructs; the downloaded artifact bytes must match the saved verification hash.
