@@ -1,0 +1,23 @@
+# WCC Submission Checklist
+
+- [ ] Live URL tested in an incognito/fresh browser
+- [ ] Production deployment is exactly one worker / one replica
+- [ ] HTTPS is enabled by the hosting platform
+- [ ] Platform/reverse-proxy upload limit is configured when available
+- [ ] `/health/deep-readiness` returns `ready` on the deployed URL
+- [ ] Fresh-browser session token flow works and token never appears in URL
+- [ ] Refresh recovery works in the same tab
+- [ ] GitHub/reviewer source reachable
+- [ ] Prior-research disclosure visible
+- [ ] AI/tool disclosure complete
+- [ ] User-research findings use real counts only
+- [ ] 2–3 minute demo recorded
+- [ ] Project-owned demo fixture works with one click
+- [ ] Actual release metrics frozen
+- [ ] No P0/P1 defects open
+- [ ] Original deck immutability demonstrated
+- [ ] Approval gate demonstrated
+- [ ] Unsupported/refusal case demonstrated
+- [ ] Saved-artifact re-verification demonstrated
+- [ ] Limitations/claims are accurate
+- [ ] Third-party notices included

@@ -1,0 +1,9 @@
+{
+  "venue": {
+    "active_image_height_m": 1.8,
+    "farthest_viewer_distance_m": 10.8,
+    "measurement_basis": "MEASURED"
+  },
+  "obvious_large.pptx": "MEETS_TARGET",
+  "obvious_tiny.pptx": "BELOW_TARGET"
+}

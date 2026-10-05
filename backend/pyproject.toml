@@ -1,0 +1,22 @@
+[project]
+name = "venue-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.128,<1",
+  "pydantic>=2.13,<3",
+  "python-multipart>=0.0.20",
+  "python-pptx>=1.0,<2",
+  "PyMuPDF>=1.26,<2",
+  "uvicorn>=0.34,<1"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9,<10", "httpx>=0.28,<1"]
+agent = ["google-genai>=1,<2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+markers = ["resource: invokes LibreOffice/rendering or full artifact round-trip"]

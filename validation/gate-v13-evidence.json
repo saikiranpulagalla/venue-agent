@@ -1,0 +1,34 @@
+{
+  "gate": "gate-v13-package-runtime-boundary",
+  "date": "2026-10-05",
+  "result": "PASS_WITH_ENVIRONMENT_LIMITATIONS",
+  "tests": {
+    "fast_non_resource": {"passed": 64, "failed": 0},
+    "resource_libreoffice": {"passed": 22, "failed": 0},
+    "total": {"passed": 86, "failed": 0}
+  },
+  "verified": [
+    "required OOXML package parts and slide presence",
+    "canonical ZIP package paths",
+    "embedded OLE/ActiveX/package rejection",
+    "external and disguised absolute-URI relationship rejection",
+    "decompression and slide XML/text/run workload bounds",
+    "rendered PDF byte bound",
+    "rendered text span bound with document closure",
+    "absolute TTL recheck after session lock wait",
+    "v12 safety-oracle invariants retained",
+    "HTTP smoke",
+    "frontend JS syntax",
+    "Python compileall",
+    "bundled fixtures accepted by strengthened intake"
+  ],
+  "not_verified_here": [
+    "Docker/Podman image build/runtime",
+    "public hosted deployment",
+    "live Gemini request with real credential",
+    "real user research",
+    "unrestricted browser E2E",
+    "final WCC submission/video",
+    "single uninterrupted long release_gate.py --full invocation under this wrapper"
+  ]
+}
